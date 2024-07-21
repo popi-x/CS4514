@@ -1,3 +1,4 @@
+import PyQt6
 from PyQt6.QtCore import (QCoreApplication, QDate, QDateTime, QMetaObject,
     QObject, QPoint, QRect, QSize, QTime, QUrl, Qt, QEvent)
 from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QCursor, QFont,
@@ -16,13 +17,17 @@ class Controller(UiLayout, QMainWindow):
 
         super(Controller, self).__init__()
         self.setupUiLayout(self)
-        self.setWindowTitle("533")
+        self.setWindowTitle("FreeSketching")
         self.setGeometry(0, 0, 1200, 800)
 
         self.importButton.clicked.connect(self.importImage)
         self.penAct.toggled.connect(self.pen)
         self.drawAct.toggled.connect(self.draw)
         self.eraseAct.toggled.connect(self.erase)
+        self.undoAct.triggered.connect(self.undo)
+        self.redoAct.triggered.connect(self.redo)
+        self.saveAct.triggered.connect(self.save)
+        self.clearAct.triggered.connect(self.graphicsView.bezierScene.clear)
         self.buttonGroup.buttonClicked.connect(self.imageClicked)
         self.generateButton.clicked.connect(self.showCandidates)
         
@@ -53,6 +58,15 @@ class Controller(UiLayout, QMainWindow):
             self.graphicsView.bezierScene.drawType = 2
         else:
             self.graphicsView.bezierScene.drawType = 0
+    
+    def undo(self):
+        self.graphicsView.bezierScene.undo()
+
+    def redo(self):
+        self.graphicsView.bezierScene.redo()
+
+    def save(self):
+        self.graphicsView.bezierScene.saveScene()
     
     
     def imageClicked(self, button):

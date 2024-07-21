@@ -3,9 +3,7 @@ from math import factorial
 from PyQt6 import QtWidgets
 from PyQt6.QtWidgets import QWidget
 from PyQt6 import QtGui, QtCore
-from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QCursor, QFont,
-    QFontDatabase, QIcon, QKeySequence, QLinearGradient, QPalette, QPainter,
-    QPixmap,QRadialGradient,QPen,QPainterPath, QAction)
+from PyQt6.QtGui import (QBrush, QColor,QPen,QPainterPath, QAction, QUndoCommand, QUndoStack, QImage, QPainter)
 from PyQt6.QtCore import (QCoreApplication, QDate, QDateTime, QMetaObject,
     QObject, QPoint, QRect, QSize, QTime, QUrl, Qt, QEvent)
 import numpy as np
@@ -63,12 +61,6 @@ class ControlPoint(QtWidgets.QGraphicsObject):
                     other.stackBefore(self)
         return super().itemChange(change, value)
 
-    '''def contextMenuEvent(self, event):
-        menu = QtWidgets.QMenu()
-        removeAction = menu.addAction(QtGui.QIcon.fromTheme('edit-delete'), 'Delete point')
-        if menu.exec(QtGui.QCursor.pos()) == removeAction:
-            self.removeRequest.emit(self)'''
-
 
     #reimplement paint function
     def paint(self, qp, option, widget=None):
@@ -77,16 +69,11 @@ class ControlPoint(QtWidgets.QGraphicsObject):
             qp.setPen(QtCore.Qt.PenStyle.NoPen)
         qp.drawPath(self._base) #draw new control points
 
-        '''
-        qp.setPen(QtCore.Qt.GlobalColor.white)
-        qp.setFont(self.font)
-        r = QtCore.QRectF(self.boundingRect()) #the bounding rectangle enclosing the whole text
-        r.setSize(r.size() * 2 / 3)
-        #qp.drawText(r, QtCore.Qt.AlignmentFlag.AlignCenter, str(self.index + 1))
-        '''
-
 class communicate(QtCore.QObject):
     editing = QtCore.pyqtSignal(int)
+
+class BezierChange(QtCore.QObject):
+    bezierChange = QtCore.pyqtSignal(int)
 
 class BezierItem(QtWidgets.QGraphicsPathItem):
     _precision = .001
@@ -96,7 +83,9 @@ class BezierItem(QtWidgets.QGraphicsPathItem):
     def __init__(self, index, points=None): #if points aren't passed, it will be None
         super().__init__()
         self.c = communicate()
+        self.b = BezierChange()
         self.editing = self.c.editing
+        self.bezierChange = self.b.bezierChange
         self.index = index
         self.setPen(QtGui.QPen(QtCore.Qt.GlobalColor.blue, 2, QtCore.Qt.PenStyle.SolidLine))
         self.outlineItem = QtWidgets.QGraphicsPathItem(self)
@@ -241,6 +230,8 @@ class BezierItem(QtWidgets.QGraphicsPathItem):
     def _controlPointMoved(self, index, pos):
         self._points[index] = pos
         self.updatePath()
+        self.currentBezierItem = selfCopy(self)
+        self.bezierChange.emit(self.index)
 
     def _rebuildPath(self):
         '''
@@ -270,6 +261,9 @@ class BezierItem(QtWidgets.QGraphicsPathItem):
                 self.pathCoords.append([x, y])
         self.setPath(self.curvePath)
 
+def selfCopy(self):
+    return BezierItem(self.index, self._points)
+
 
 
 
@@ -279,7 +273,7 @@ class MyCanvas(QtWidgets.QGraphicsView):
         super().__init__()
        
 
-        with open('controlPoints.json', 'r') as f:
+        with open('sample/controlPoints.json', 'r') as f:
             data = json.load(f)
         
         self.cp = [j for i in data['control_points'] for j in i]
@@ -326,16 +320,14 @@ class MyCanvas(QtWidgets.QGraphicsView):
         for group in self.cp:
             self.controlPoints = group
             self.bezierItem = BezierItem(index, self.controlPoints)
+            #self.bezierScene.currentBezierItems.append(self.bezierItem)
             self.bezierItem.editing.connect(self.deselectCurves)
             self.bezierScene.addItem(self.bezierItem)
             index += 1
+        #self.BezierScene.lastBezierItems = copy.copy(self.BezierScene.currentBezierItems)
 
         self.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-
-
-'''class AddCommand(QtWidgets.QUndoCommand):
-    def __init__(self, scene):
-        super(AddCommand, self).__init__()'''
+        self.bezierScene.currentItems = self.bezierScene.items()
 
 
 class CustomScene(QtWidgets.QGraphicsScene):
@@ -345,55 +337,131 @@ class CustomScene(QtWidgets.QGraphicsScene):
         self.penType = 0
         self.drawPen = QtGui.QPen(QtCore.Qt.GlobalColor.black, 2, QtCore.Qt.PenStyle.SolidLine)
         self.eraserPen = QtGui.QPen(QtCore.Qt.GlobalColor.gray, 3, QtCore.Qt.PenStyle.SolidLine)
+        self.undoStack = QUndoStack()
+        self.currentStrokeItems = []
+        self.lastStrokeItems = []
 
-    def mousePressEvent(self, event):#重载鼠标事件
+    def mousePressEvent(self, event):
         if self.drawType == 0:
             super().mousePressEvent(event)
             return
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:#仅左键事件触发
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             if self.drawType == 2:
+                self.eraserCoords = []
+                self.eraserCoords.append([event.scenePos().x(), event.scenePos().y()])
                 self.QEraserPath = QtWidgets.QGraphicsPathItem()  
                 self.eraserPath = QtGui.QPainterPath()
                 self.eraserPath.moveTo(event.scenePos())
                 self.QEraserPath.setPen(self.eraserPen)
                 self.addItem(self.QEraserPath)
             if self.drawType == 1:
-                self.QGraphicsPath = QtWidgets.QGraphicsPathItem() #实例QGraphicsPathItem
-                self.path1 = QtGui.QPainterPath()#实例路径函数
-                self.path1.moveTo(event.scenePos()) #路径开始于
-                self.QGraphicsPath.setPen(self.drawPen) #应用笔
-                self.addItem(self.QGraphicsPath) #场景添加图元
+                self.QGraphicsPath = QtWidgets.QGraphicsPathItem() 
+                self.path1 = QtGui.QPainterPath()
+                self.path1.moveTo(event.scenePos()) 
+                self.QGraphicsPath.setPen(self.drawPen) 
+                self.addItem(self.QGraphicsPath) 
 
 
-    def mouseMoveEvent(self, event):#重载鼠标移动事件
+    def mouseMoveEvent(self, event):
         if self.drawType == 0:
             super().mouseMoveEvent(event)
             return
-        if event.buttons() & QtCore.Qt.MouseButton.LeftButton: #仅左键时触发，event.button返回notbutton，需event.buttons()判断，这应是对象列表，用&判断
+        if event.buttons() & QtCore.Qt.MouseButton.LeftButton: 
             if self.drawType == 2:
+                self.eraserCoords.append([event.scenePos().x(), event.scenePos().y()])
                 self.eraserPath.lineTo(event.scenePos())
                 self.QEraserPath.setPath(self.eraserPath)
             if self.drawType == 1:
-                if self.path1:#判断self.path1
-                    self.path1.lineTo(event.scenePos()) #移动并连接点
-                    self.QGraphicsPath.setPath(self.path1) #self.QGraphicsPath添加路径，如果写在上面的函数，是没线显示的，写在下面则在松键才出现线
+                if self.path1:
+                    self.path1.lineTo(event.scenePos()) 
+                    self.QGraphicsPath.setPath(self.path1) 
 
-
-    def mouseReleaseEvent(self, event):#重载鼠标松开事件
+    def mouseReleaseEvent(self, event):
         if self.drawType == 0:
             super().mouseReleaseEvent(event)
             return
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:#判断左键松开
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             if self.drawType == 2:
                 self.eraseItem()
                 self.removeItem(self.QEraserPath)
                 self.eraserPath = QPainterPath()
             if self.drawType == 1:
                 if self.path1:
-                    self.path1.closeSubpath() #结束路径
+                    self.path1.closeSubpath() 
+                    self.lastStrokeItems = copy.copy(self.currentStrokeItems)
+                    self.currentStrokeItems.append(self.QGraphicsPath)
+            addCom = AddCommand(self)
+            self.undoStack.push(addCom)
+
+    def isIntersected(self,item):
+        for i in self.eraserCoords:
+            diff = np.array(item.pathCoords) - np.array(i)
+            if np.linalg.norm(diff, axis=1).min() < 2:
+                return True
+        return False
 
     def eraseItem(self):
         for item in self.items(self.eraserPath, QtCore.Qt.ItemSelectionMode.IntersectsItemShape):
-            self.removeItem(item)
+            if item != self.QEraserPath:
+                if not isinstance(item, BezierItem):
+                    self.lastStrokeItems = copy.copy(self.currentStrokeItems)
+                    self.currentStrokeItems.remove(item)
+                    self.removeItem(item)
+                else:
+                    if self.isIntersected(item):
+                        self.removeItem(item)
+        return
         
+            
+    def undo(self):
+        self.undoStack.undo()
+
+    def redo(self):
+        self.undoStack.redo()
+
+    def saveScene(self):
+        image = QImage(self.sceneRect().size().toSize(), QImage.Format.Format_ARGB32)
+        image.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        self.render(painter)
+        painter.end()
+
+        fileName, _ = QtWidgets.QFileDialog.getSaveFileName(None, "Save Image", "", "PNG(*.png);;JPEG(*.jpg *.jpeg);;All Files(*.*)")
+        if fileName:
+            image.save(fileName)
     
+
+                
+
+class AddCommand(QUndoCommand):
+    def __init__(self, scene):
+        super(AddCommand, self).__init__()
+
+        self.scene = scene
+
+        self.lastStrokeItems = copy.copy(self.scene.lastStrokeItems)
+        self.currentStrokeItems = copy.copy(self.scene.currentStrokeItems)
+        
+
+    def undo(self):
+        for item in self.scene.currentStrokeItems:
+            self.scene.removeItem(item)
+
+
+        self.scene.currentStrokeItems = copy.copy(self.lastStrokeItems)
+        self.scene.lastStrokeItems = copy.copy(self.lastStrokeItems)
+        
+        for item in self.scene.lastStrokeItems:
+                self.scene.addItem(item)
+
+    def redo(self):
+        for item in self.scene.lastStrokeItems:
+            self.scene.removeItem(item)
+
+        self.scene.currentStrokeItems = copy.copy(self.currentStrokeItems)
+        self.scene.lastStrokeItems = copy.copy(self.currentStrokeItems)
+        
+        for item in self.scene.currentStrokeItems:
+                self.scene.addItem(item)
+
+            
